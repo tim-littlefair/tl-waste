@@ -1,0 +1,10 @@
+.venv3
+.vscode/settings.json
+**/*.zip
+**/__pycache__
+**/.coverage
+**/htmlcov
+
+.vscode/.ropeproject/config.py
+.vscode/.ropeproject/objectdb
+test/camelid/*

@@ -1,0 +1,182 @@
+<!doctype html>
+    <head>
+        <meta charset="utf-8">
+        <meta http-equiv="X-UA-Compatible" content="IE=edge">
+        <title>Tim Littlefair's Printable Password Generator</title>
+        <meta name="description" content="Page to generate a table of passwords.  Intent is that these should be printed.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link rel="icon" type="image/png" href="/favicon.ico">
+        <link rel="shortcut icon" type="image/png" href="/favicon.ico">
+
+        <link 
+            rel="stylesheet" 
+            href="https://unpkg.com/purecss@2.0.3/build/pure-nr-min.css" 
+            Xintegrity="sha384-4ZPLezkTZTsojWFhpdFembdzFudphhoOzIunR1wH6g1WQDzCAiPvDyitaK67mp0+" 
+            crossorigin="anonymous"
+        >
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link rel="preconnect" href="https://fonts.gstatic.com">
+        <link href="https://fonts.googleapis.com/css2?family=Inconsolata&display=swap" rel="stylesheet"> 
+
+        <style>
+        html { 
+            font-family: 'Inconsolata', monospace;
+            font-size:large;
+        }
+        div.commentary {
+            font-size: small;
+        }
+        table, tbody, thead, tr {
+            width: "98%";
+            table-layout: "fixed";
+        }
+        /* 
+         * The following not working yet so the columns have been
+         * sized by padding the column heading text-emphasis.
+
+        th.date_col {
+            width: "15%";
+        }
+        th.context_col {
+            width: "60%";
+        }
+        th.password_col {
+            width: "20%";
+        }
+         */
+        </style>
+
+        <script>
+            function password_generator( len ) {
+                var num_bits_required;
+                var num_bytes_required;
+                var random_byte_buffer;
+                var password_candidate;
+
+                num_bits_required = len*6;
+                num_bytes_required = Math.floor( (7+num_bits_required)/8 );
+                random_byte_buffer = new Uint8Array(num_bytes_required);
+                random_byte_buffer = window.crypto.getRandomValues(random_byte_buffer);
+                password_candidate = btoa(String.fromCharCode.apply(null,random_byte_buffer));
+                return password_candidate.substring(0,len);
+            }
+
+            function generate_row(password) {
+                var cell_contents;
+                eltype = "td"
+                cell_contents = [ "&nbsp;", "&nbsp;", password ]; 
+                document.write("<tr>\n");
+                for(i=0;i<cell_contents.length;++i)
+                {
+                    document.write("<" + eltype + ">");
+                    document.write(cell_contents[i])
+                    document.write("</" + eltype + ">\n");
+                }
+                document.write("</tr>\n");
+            }   
+
+            function generate_header() {
+                document.write("<table class='pure-table pure-table-bordered'>\n");
+                document.write("<thead>\n");
+                document.write("<tr>\n");
+                eltype="th";
+                cell_class = [ "date_col", "context_col", "password_col" ];
+                cell_contents = [ 
+                    "Date" + "&nbsp".repeat(4), 
+                    "Context"+ "&nbsp".repeat(40), 
+                    "Password"  + "&nbsp".repeat(4)
+                ];
+                for(i=0;i<cell_contents.length;++i)
+                {
+                    document.write("<" + eltype + " class='" + cell_class[i] + "'>");
+                    document.write(cell_contents[i])
+                    document.write("</" + eltype + ">\n");
+                }
+                document.write("</tr>\n");
+                document.write("</thead>\n");
+                document.write("<tbody>\n");
+            }
+
+            function generate_rows(pw_len, num_rows) {
+                for(j=0;j<num_rows;++j) {
+                    generate_row(password_generator(pw_len));
+                }
+            }     
+
+            function generate_footer() {
+                document.write("</tbody></table>\n");
+            }     
+        </script>
+    </head>
+    <body>
+        <div class="commentary">
+            <p>
+                Respected commentator on security Bruce Schneier wrote:
+            </p>
+            <blockquote>
+                Simply, people can no longer remember passwords good enough 
+                to reliably defend against dictionary attacks, and are much 
+                more secure if they choose a password too complicated to 
+                remember and then write it down. We’re all good at securing 
+                small pieces of paper. I recommend that people write their 
+                passwords down on a small piece of paper, and keep it with 
+                their other valuable small pieces of paper: in their wallet.
+            </blockquote>
+            <a href="https://www.schneier.com/blog/archives/2005/06/write_down_your.html">
+                Original source
+            </a>
+            <p>
+                I like this advice, and follow it myself for some passwords, 
+                although sadly I need more passwords on a regular basis than
+                fit on a piece of paper small enough for my wallet.
+            </p>
+            <p>
+                I use a password manager for some, but not all of my passwords.
+                For the ones I don't want to put into a password manager I 
+                print out a page like this and keep it safe in my home or around
+                my person.  I find it easier to print a page of pre-generated 
+                passwords and fill in where I use them rather than generate them 
+                in the browser and copy them out to the paper.
+            </p>
+            <p>
+                Recommendations for use:
+                <ul>
+                    <li>
+                        Select an 8-, 10- or 12-character password according to the 
+                        incentive for an evil person to brute force it, and the cost 
+                        to yourself if they do.  Each character contributes 6 bits to 
+                        the cost of brute force discovery.  Don't use an 8-character
+                        password for anything in the least important.
+                    </li>
+                    <li>
+                        It's up to you what you put in the date and context columns.
+                        Be explicit if you need to and trust that you will keep your paper safe.
+                        Be cryptic if you prefer to, but still be careful with the paper.
+                    </li>
+                    <li>
+                        The page is self-contained - you can download the HTML source using
+                        your browser, and run it from your local filesystem, and change how it
+                        works if you want to.
+                    </li>
+                    <li>
+                        If you need to know whether this page is secure enough to use
+                        safely for your application (whether it's logging in to the 
+                        gardening club or running a nuclear power station), get someone
+                        appropriately qualified to inspect the web page source.
+                        I can't tell you whether this is good enough for your needs.
+                    </li>
+                </ul>
+            </p>
+        </div>
+        <div class="table">
+            <h4>Candidate Passwords</h4>
+            <script>
+                generate_header();
+                generate_rows(8,4);
+                generate_rows(10,4);
+                generate_rows(12,4);
+                generate_footer();
+            </script>
+        </div>
+    </body>
+</html>
