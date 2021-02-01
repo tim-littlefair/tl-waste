@@ -1,8 +1,6 @@
 import ifaddr
 import boto3
 
-_DEFAULT_REGION="ap-southeast-2"
-
 _preferred_ip = None
 
 def _select_ipv4_address():
@@ -30,7 +28,7 @@ def _select_ipv4_address():
 class Factory:
     def __init__(
             self,
-            region_name=_DEFAULT_REGION,
+            region_name=,
             ipv4_address=None,
         ):
         self.region_name = region_name

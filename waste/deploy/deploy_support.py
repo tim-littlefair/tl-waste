@@ -285,17 +285,20 @@ def create_api_and_routes(app_baseline_name, lambda_deployment_result):
     get_integrations_response = apiv2_client.get_integrations( 
         ApiId = api_id 
     )
-    #logging.info(get_integrations_response)
-    [ integration_details ] = [ get_integrations_response["Items"] ]
+    [[ integration_details ]] = [ get_integrations_response["Items"] ]
+
+    source_arn = integration_details['IntegrationUri']
+    source_arn = source_arn.replace(":lambda:",":execute-api:") 
+    source_arn = source_arn.replace(":function:",":")
+    source_arn = source_arn.replace(app_baseline_name,api_id)
+    source_arn += "/*/$default"
 
     add_permission_response = lambda_client.add_permission(
         FunctionName = fn_arn,
         StatementId = app_baseline_name + "-permit_api_to_run_function",
         Action = "lambda:InvokeFunction",
         Principal = "apigateway.amazonaws.com",
-        SourceArn = "arn:aws:execute-api:ap-southeast-2:441458683425:%s/*/$default" % (
-            api_id
-        )
+        SourceArn = source_arn
     )
     #logging.info(add_permission_response)
     assert _get_response_status_code(add_permission_response) == 201

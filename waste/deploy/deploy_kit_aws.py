@@ -1,15 +1,8 @@
 import boto3
 
-_DEFAULT_REGION="ap-southeast-2"
-_DEFAULT_APP_BUCKET_NAME='tl-trailer'
-
 class Factory:
-    def __init__(
-            self,
-            region_name=_DEFAULT_REGION
-        ):
-        current_user_arn = boto3.resource("iam").CurrentUser().arn
-        self.aws_account = current_user_arn.split(":")[4]
+    def __init__( self, region_name ):
+        self.aws_account = boto3.client('sts').get_caller_identity().get('Account')
         self.region_name = region_name
         self.clients = { }
         self._create_client("iam")

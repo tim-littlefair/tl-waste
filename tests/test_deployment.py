@@ -26,10 +26,10 @@ def test_simple_deployment():
     baseline_name, baseline_url = deploy_app("waste-test-0")
     nonexistent_response = requests.get(baseline_url+"/nonexistent.docx")
     assert 404 == nonexistent_response.status_code 
-    print()
-    print("App baseline %s deployed and accessible via URL %s" % (
-            baseline_name, baseline_url
-    ))
+    logging.info(
+        "App baseline %s deployed and accessible via URL %s",
+        baseline_name, baseline_url
+    )
 
 def test_deployment_with_content():
     in_memory_zip_stream = io.BytesIO()
@@ -45,10 +45,10 @@ def test_deployment_with_content():
         "waste-test-1",
         content_zip_stream=in_memory_zip_stream
     )
-    print()
-    print("App baseline %s deployed and accessible via URL %s" % (
-            baseline_name, baseline_url
-    ))
+    logging.info(
+        "App baseline %s deployed and accessible via URL %s",
+        baseline_name, baseline_url
+    )
     public_html_response = requests.get(baseline_url+"/public.html")
     assert 200 == public_html_response.status_code
     assert "text/html" == public_html_response.headers["Content-Type"]
@@ -65,10 +65,10 @@ def test_deployment_as_website():
         content_zip_stream=in_memory_zip_stream,
         default_doc_name="index.html"
     )
-    print()
-    print("App baseline %s deployed and accessible via URL %s" % (
-            baseline_name, baseline_url
-    ))
+    logging.info(
+        "App baseline %s deployed and accessible via URL %s",
+        baseline_name, baseline_url
+    )
     try:
         for fn in namelist:
             logging.info("Checking that %s is available",fn)
@@ -93,10 +93,10 @@ def test_deployment_with_cache_zip():
         content_zip_stream=in_memory_zip_stream,
         cache_zip_path="/cache.zip"
     )
-    print()
-    print("App baseline %s deployed and accessible via URL %s" % (
-            baseline_name, baseline_url
-    ))
+    logging.info(
+        "App baseline %s deployed and accessible via URL %s",
+        baseline_name, baseline_url
+    )
     for object_key in SIMULATED_CACHE_CONTENTS:
         expected_length = len(SIMULATED_CACHE_CONTENTS[object_key])
         logging.info("Requesting %s",object_key)
