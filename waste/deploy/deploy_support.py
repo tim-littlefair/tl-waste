@@ -144,8 +144,6 @@ apiv2_client = _factory.get_client('apigatewayv2')
 logs_client = _factory.get_client('logs')
 region_name = _factory.get_region_name()
 
-_CLOUDWATCH_LOGGROUP_ARN = _factory.get_arn("arn:aws:logs","log-group:/aws/lambda/")
-
 lambda_url = None
 
 app_name_matches = (
