@@ -68,6 +68,17 @@ class ArgParser(argparse.ArgumentParser):
             help="Suppress retirement of previously deployed baselines of the same app"
                 " (ignored if action=" + _ACTION_RETIRE + ")"
         )
+        self.add_argument(
+            "--create-aim-groups", action="store_true",
+            help="Create AIM groups which can be used to assign AWS console users rights"
+            " to view the app, edit storage content, and edit lambdas"
+        )
+        self.add_argument(
+            "--api-key", 
+            default = None,
+            help = "API key for the app,"
+            " or '*' for an API key to be generated, or None for no API key"
+        )
 
 arg_parser = ArgParser()
 args = arg_parser.parse_args()
@@ -80,8 +91,9 @@ try:
             )
         deploy_app(
             args.app_name, content_zip_stream, 
-            args.index_doc, args.cache_zip_path
-
+            default_doc_name = args.index_doc, 
+            cache_zip_path = args.cache_zip_path,
+            create_groups = args.create_groups
         )
     elif args.action==_ACTION_RETIRE:
         retire_app(args.app_name)
