@@ -217,16 +217,15 @@ def create_function(
     # log group - if the test invocation does not run the log group
     # is not created and the API gateway steps fail.
     logging.info("Starting lambda test invocation")
-    test_auth_response = lambda_client.invoke(
-        FunctionName=app_baseline_name + "_authfn",
-        LogType='Tail',
-        Payload=json.dumps(TEST_EVENT_FOR_AUTHFN)
-    )
     test_invocation_response = lambda_client.invoke(
         FunctionName=app_baseline_name,
         LogType='Tail',
         Payload=json.dumps(TEST_EVENT_FOR_HANDLER)
     )
+    #logging.info(test_invocation_response)
+    #logging.info(base64.b64_decode(test_invocation_response["x-amz-log-result"]))
+    assert _get_response_status_code(test_invocation_response) == 200
+
     logging.info("Finished lambda test invocation")
     for _ in range(0,10): #pragma: no branch
         loggroupName = '/aws/lambda/'+app_baseline_name
@@ -392,19 +391,30 @@ def deploy_api(app_baseline_name,lambda_deployment_result, api_key):
         #logging.info(update_route_response)
         assert _get_response_status_code(update_route_response) == 201
 
+    # Items available for inclusion in API access logs are listed here:
+    # https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-logging-variables.html
+    _LOG_FORMAT_ITEMS = [
+        "requestId", "extendedRequestId",
+        "accountId",
+        "authorizer.error", "authorizer.principalId",
+        "dataProcessed",
+        "error.message","error.messageString","error.responseType",
+        "httpMethod",
+        "identity.caller","identity.user",
+        "integration.error","integration.error.message","integration.status",
+        #"integration.integrationErrorMessage","integration.integrationStatus",
+        "responseLength",
+        "status"
+    ]
+    log_format = '{ '
+    for lfi in _LOG_FORMAT_ITEMS:
+        log_format += '"%s": "$context.%s" ' % ( lfi, lfi, )
+    log_format += '}'
     update_stage_response = apiv2_client.update_stage(
         ApiId = api_id,
         AccessLogSettings = {
             "DestinationArn": lambda_deployment_result["loggroup_arn"],
-            "Format": '{ ' 
-                '"requestId":"$context.requestId", '
-                '"status":"$context.status", '
-                '"autherr":"$context.authorizer.error" ' 
-                '"cems":"$context.error.messageString", '
-                '"rt": "$context.error.responseType", '
-                '"ciems": "$context.integrationErrorMessage", '
-                '"cis: "$context.integrationStatus" '
-            '}'
+            "Format": log_format
         },
         StageName = '$default',
         DefaultRouteSettings = {
