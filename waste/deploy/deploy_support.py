@@ -290,6 +290,8 @@ def create_bucket(app_bucket_name, content_zip_stream=None):
 def deploy_api(app_baseline_name,lambda_deployment_result, api_key):
     get_fn_response = lambda_client.get_function(FunctionName=app_baseline_name)
     fn_arn = get_fn_response["Configuration"]["FunctionArn"]
+    get_authfn_response  = lambda_client.get_function(FunctionName=app_baseline_name+"_authfn")
+    authfn_arn = get_authfn_response["Configuration"]["FunctionArn"]
     integration_arn = _factory.get_integration_arn(fn_arn)
 
     api_details = apiv2_client.create_api(
@@ -324,7 +326,7 @@ def deploy_api(app_baseline_name,lambda_deployment_result, api_key):
     source_arn += "/*/$default"
 
     add_permission_response = lambda_client.add_permission(
-        FunctionName = fn_arn,
+        FunctionName = authfn_arn,
         StatementId = app_baseline_name + "-permit_api_to_run_function",
         Action = "lambda:InvokeFunction",
         Principal = "apigateway.amazonaws.com",
@@ -348,11 +350,20 @@ def deploy_api(app_baseline_name,lambda_deployment_result, api_key):
             "/invocations"
         )
         #logging.info(authorizer_uri)
+        add_permission_response = lambda_client.add_permission(
+            FunctionName = authfn_arn,
+            StatementId = app_baseline_name + "-permit_api_to_run_authfn",
+            Action = "lambda:InvokeFunction",
+            Principal = "apigateway.amazonaws.com",
+            SourceArn = source_arn
+        )
         create_authorizer_response = apiv2_client.create_authorizer(
             ApiId = api_id,
-            AuthorizerCredentialsArn = _factory.get_arn(
-                "arn:aws:iam","role/"+_LAMBDA_ROLE_NAME,include_region=False
-            ),
+            #AuthorizerCredentialsArn = integration_arn,
+            #AuthorizerCredentialsArn = source_arn,
+            #AuthorizerCredentialsArn = _factory.get_arn(
+            #    "arn:aws:iam","role/"+_LAMBDA_ROLE_NAME,include_region=False
+            #),
             AuthorizerPayloadFormatVersion = "2.0",
             AuthorizerResultTtlInSeconds = 300,
             AuthorizerType = 'REQUEST',
