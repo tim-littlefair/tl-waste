@@ -21,15 +21,16 @@ from simulated_content_generation import (
     SIMULATED_BUCKET_CONTENTS
 )
 
+# '''
 def test_simple_deployment():
     retire_app("waste-test-0")
-    baseline_name, baseline_url = deploy_app("waste-test-0")
-    nonexistent_response = requests.get(baseline_url+"/nonexistent.docx")
-    assert 404 == nonexistent_response.status_code 
+    baseline_name, baseline_url = deploy_app("waste-test-0", api_key=None)
     logging.info(
         "App baseline %s deployed and accessible via URL %s",
         baseline_name, baseline_url
     )
+    nonexistent_response = requests.get(baseline_url+"/nonexistent.docx")
+    assert 404 == nonexistent_response.status_code 
 
 def test_deployment_with_content():
     in_memory_zip_stream = io.BytesIO()
@@ -43,7 +44,8 @@ def test_deployment_with_content():
     retire_app("waste-test-1")
     baseline_name, baseline_url = deploy_app(
         "waste-test-1",
-        content_zip_stream=in_memory_zip_stream
+        content_zip_stream=in_memory_zip_stream,
+        api_key = None,
     )
     logging.info(
         "App baseline %s deployed and accessible via URL %s",
@@ -63,7 +65,8 @@ def test_deployment_as_website():
     baseline_name, baseline_url = deploy_app(
         "waste-test-2",
         content_zip_stream=in_memory_zip_stream,
-        default_doc_name="index.html"
+        default_doc_name="index.html",
+        api_key = None,
     )
     logging.info(
         "App baseline %s deployed and accessible via URL %s",
@@ -91,7 +94,8 @@ def test_deployment_with_cache_zip():
     baseline_name, baseline_url = deploy_app(
         "waste-test-3",
         content_zip_stream=in_memory_zip_stream,
-        cache_zip_path="/cache.zip"
+        cache_zip_path="/cache.zip",
+        api_key = None,
     )
     logging.info(
         "App baseline %s deployed and accessible via URL %s",
@@ -116,3 +120,20 @@ def test_deployment_with_cache_zip():
             request_read_time - request_start_time,
             int(actual_length/(request_read_time - request_start_time))
         )
+
+'''
+
+# Test for API key behaviour - presently failing
+def test_deployment_with_generated_api_key():
+    retire_app("waste-test-4")
+    baseline_name, baseline_url = deploy_app(
+        "waste-test-4", 
+        # the default value of api_key triggers generation of an API key
+    )
+    logging.info(
+        "App baseline %s deployed and accessible via URL %s",
+        baseline_name, baseline_url
+    )
+    not_authorized_response = requests.get(baseline_url+"/nonexistent.docx")
+    assert 403 == not_authorized_response.status_code 
+# '''

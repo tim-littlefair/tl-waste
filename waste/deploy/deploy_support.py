@@ -32,7 +32,7 @@ _S3_POLICY_JSON_BUCKET = """{
             "Principal": {
                 "AWS": [
                     "arn:aws:iam::441458683425:role/LambdaBasicExecution",
-                    "arn:aws:iam::441458683425:user/tim"
+                    "arn:aws:iam::441458683425:user/deploy"
                 ]
             },
             "Action": [
@@ -47,8 +47,9 @@ _S3_POLICY_JSON_BUCKET = """{
     ]
 }"""
 
-
-# arn:aws:logs:*:441458683425:log-group:tim-test:log-stream:*
+# For the moment, a hand-created role is used for both the primary 
+# service lambda and the authorizer lambda
+_LAMBDA_ROLE_NAME = "LambdaBasicExecution"
 
 _GROUP_SUFFIX_VIEWER = "logviewer"
 _GROUP_SUFFIX_EDITOR = "bucketeditor"
@@ -181,8 +182,6 @@ def create_function(
         except FileNotFoundError:
             pass
     lambda_zip.close()
-    _LAMBDA_ROLE_NAME = "LambdaBasicExecution"
-    # For the moment, a hand-created role is in use
     role_arn = _factory.get_arn("arn:aws:iam","role/"+_LAMBDA_ROLE_NAME,include_region=False)
     which_handler = 'handler.simple_lambda_handler.lambda_handler'
     fn_env_vars = { ENVVAR_CONTENT_BUCKET_NAME: app_baseline_name }
@@ -308,16 +307,22 @@ def deploy_api(app_baseline_name,lambda_deployment_result, api_key):
     get_integrations_response = apiv2_client.get_integrations( 
         ApiId = api_id 
     )
+    assert _get_response_status_code(get_integrations_response) == 200
+    assert len(get_integrations_response["Items"]) == 1
     [[ integration_details ]] = [ get_integrations_response["Items"] ]
     integration_uri = integration_details['IntegrationUri']
-    #logging.info(integration_uri)
+
+    get_integration_response = apiv2_client.get_integration(
+        ApiId = api_id, IntegrationId = integration_details["IntegrationId"]        
+    )
+    #logging.info(get_integration_response)
+    assert _get_response_status_code(get_integration_response) == 200
+    
     source_arn = copy.deepcopy(integration_uri)
     source_arn = source_arn.replace(":lambda:",":execute-api:") 
     source_arn = source_arn.replace(":function:",":")
     source_arn = source_arn.replace(app_baseline_name,api_id)
     source_arn += "/*/$default"
-    #logging.info(integration_uri)
-    #logging.info(source_arn)
 
     add_permission_response = lambda_client.add_permission(
         FunctionName = fn_arn,
@@ -330,19 +335,12 @@ def deploy_api(app_baseline_name,lambda_deployment_result, api_key):
     assert _get_response_status_code(add_permission_response) == 201
 
     # If API key protection is required, set up an authorizer
-    stage_variables = None
+    stage_variables = {}
     if api_key is not None:
-        stage_variables =  { "WASTE_API_KEY": api_key }
-        get_auth_fn_response = lambda_client.get_function(FunctionName=app_baseline_name)
-        auth_fn_arn = get_auth_fn_response["Configuration"]["FunctionArn"]
-        add_permission_response = lambda_client.add_permission(
-            FunctionName = auth_fn_arn,
-            StatementId = app_baseline_name + "-permit_api_to_run_auth_function",
-            Action = "lambda:InvokeFunction",
-            Principal = "apigateway.amazonaws.com",
-            SourceArn = source_arn
+        stage_variables["WASTE_API_KEY"] = api_key
+        get_auth_fn_response = lambda_client.get_function(
+            FunctionName=app_baseline_name + "_authfn"
         )
-        assert _get_response_status_code(add_permission_response) == 201
         authorizer_uri = (
             "arn:aws:apigateway:" + 
             region_name + 
@@ -350,36 +348,83 @@ def deploy_api(app_baseline_name,lambda_deployment_result, api_key):
             integration_uri + 
             "/invocations"
         )
-        logging.info(authorizer_uri)
-        apiv2_client.create_authorizer(
+        #logging.info(authorizer_uri)
+        create_authorizer_response = apiv2_client.create_authorizer(
             ApiId = api_id,
+            AuthorizerCredentialsArn = _factory.get_arn(
+                "arn:aws:iam","role/"+_LAMBDA_ROLE_NAME,include_region=False
+            ),
             AuthorizerPayloadFormatVersion = "2.0",
             AuthorizerResultTtlInSeconds = 300,
             AuthorizerType = 'REQUEST',
             AuthorizerUri = authorizer_uri,
             EnableSimpleResponses=True,
             IdentitySource = [ 
-                '$request.header.x-api-key','$stageVariables.WASTE_API_KEY',
+                #'$request.header.x-api-key',
+                '$stageVariables.WASTE_API_KEY',
             ],
-            Name = 'lambda-authorizer',
+            Name = 'waste-api-key-authorizer',
         )
+        assert _get_response_status_code(create_authorizer_response) == 201
+        #logging.info(create_authorizer_response)
+        authorizer_id = create_authorizer_response["AuthorizerId"]
+
+        auth_fn_arn = get_auth_fn_response["Configuration"]["FunctionArn"]
+        add_permission_response = lambda_client.add_permission(
+            FunctionName = app_baseline_name + "_authfn", #auth_fn_arn,
+            StatementId = app_baseline_name + "-permit_api_to_run_auth_function",
+            Action = "lambda:InvokeFunction",
+            Principal = "apigateway.amazonaws.com",
+            SourceArn = source_arn
+        )
+        assert _get_response_status_code(add_permission_response) == 201
+
+        # Attach the authorizer to the default route
+        get_routes_response = apiv2_client.get_routes(ApiId = api_id)
+        assert _get_response_status_code(get_routes_response) == 200
+        assert len(get_routes_response["Items"]) == 1
+        default_route_id = get_routes_response["Items"][0]["RouteId"]
+        update_route_response = apiv2_client.update_route(
+            ApiId = api_id, RouteId = default_route_id,
+            AuthorizationType = 'CUSTOM',
+            AuthorizerId = authorizer_id
+        )
+        #logging.info(update_route_response)
+        assert _get_response_status_code(update_route_response) == 201
 
     update_stage_response = apiv2_client.update_stage(
         ApiId = api_id,
         AccessLogSettings = {
             "DestinationArn": lambda_deployment_result["loggroup_arn"],
-            "Format": '{ "requestId":"$context.requestId", "status":"$context.status" }'
+            "Format": '{ ' 
+                '"requestId":"$context.requestId", '
+                '"status":"$context.status", '
+                '"autherr":"$context.authorizer.error" ' 
+                '"cems":"$context.error.messageString", '
+                '"rt": "$context.error.responseType", '
+                '"ciems": "$context.integrationErrorMessage", '
+                '"cis: "$context.integrationStatus" '
+            '}'
         },
         StageName = '$default',
         DefaultRouteSettings = {
             "DetailedMetricsEnabled": True,
             "ThrottlingBurstLimit": 10,
             "ThrottlingRateLimit": 10.0,
+            # We would like to have logging/tracing on but it is not supported, 
+            # as advertised in this error message
+            # E botocore.errorfactory.BadRequestException: 
+            # An error occurred (BadRequestException) when calling the UpdateStage operation: 
+            # Execution logs are not supported on protocolType HTTP
+            #"DataTraceEnabled": True,
+            #"LoggingLevel": "INFO"            
         },
         StageVariables = stage_variables
     )
     # logging.info(update_stage_response)
     assert _get_response_status_code(update_stage_response) == 200
+    #logging.info(update_stage_response)
+
     return api_details
 
 def deploy_bucket(app_baseline_name,initial_bucket_content_zip=None):
