@@ -69,8 +69,8 @@ class ArgParser(argparse.ArgumentParser):
                 " (ignored if action=" + _ACTION_RETIRE + ")"
         )
         self.add_argument(
-            "--create-aim-groups", action="store_true",
-            help="Create AIM groups which can be used to assign AWS console users rights"
+            "--create-iam-groups", action="store_true",
+            help="Create IAM groups which can be used to assign AWS console users rights"
             " to view the app, edit storage content, and edit lambdas"
         )
         self.add_argument(
@@ -93,7 +93,7 @@ try:
             args.app_name, content_zip_stream, 
             default_doc_name = args.index_doc, 
             cache_zip_path = args.cache_zip_path,
-            create_groups = args.create_groups
+            create_groups = args.create_iam_groups
         )
     elif args.action==_ACTION_RETIRE:
         retire_app(args.app_name)
@@ -106,7 +106,7 @@ try:
 #except NotImplementedError:
 #    pass
 except botocore.exceptions.ClientError as e:
-    if True or "InvalidClientTokenId" in str(e):
+    if "InvalidClientTokenId" in str(e):
         logging.error("Environment does not contain a valid AWS token")
         sys.exit(2)
     else:
