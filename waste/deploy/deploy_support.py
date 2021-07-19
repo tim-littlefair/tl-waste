@@ -31,8 +31,7 @@ _S3_POLICY_JSON_BUCKET = """{
             "Effect": "Allow",
             "Principal": {
                 "AWS": [
-                    "arn:aws:iam::441458683425:role/LambdaBasicExecution",
-                    "arn:aws:iam::441458683425:user/deploy"
+                    "arn:aws:iam::441458683425:role/LambdaBasicExecution"
                 ]
             },
             "Action": [
