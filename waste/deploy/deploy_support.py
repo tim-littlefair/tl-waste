@@ -29,9 +29,8 @@ _S3_POLICY_JSON_BUCKET = """{
             "Sid": "AllowLambdaToCreateAndAccessBucket",
             "Effect": "Allow",
             "Principal": {
-                "AWS": [
-                    "arn:aws:iam::441458683425:role/LambdaBasicExecution",
-                    "arn:aws:iam::441458683425:user/tim"
+                "AWS": [ 
+                    "arn:aws:iam::441458683425:role/LambdaBasicExecution"
                 ]
             },
             "Action": [
