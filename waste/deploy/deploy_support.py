@@ -149,6 +149,7 @@ lambda_client = _factory.get_client('lambda')
 apiv2_client = _factory.get_client('apigatewayv2')
 logs_client = _factory.get_client('logs')
 region_name = _factory.get_region_name()
+account_id = _factory.get_account_id()
 
 lambda_url = None
 
@@ -292,6 +293,7 @@ def deploy_api(app_baseline_name,lambda_deployment_result, api_key):
     get_authfn_response  = lambda_client.get_function(FunctionName=app_baseline_name+"_authfn")
     authfn_arn = get_authfn_response["Configuration"]["FunctionArn"]
     integration_arn = _factory.get_integration_arn(fn_arn)
+    logging.info(get_authfn_response)
 
     api_details = apiv2_client.create_api(
         Name=app_baseline_name, 
@@ -318,22 +320,6 @@ def deploy_api(app_baseline_name,lambda_deployment_result, api_key):
     #logging.info(get_integration_response)
     assert _get_response_status_code(get_integration_response) == 200
     
-    source_arn = copy.deepcopy(integration_uri)
-    source_arn = source_arn.replace(":lambda:",":execute-api:") 
-    source_arn = source_arn.replace(":function:",":")
-    source_arn = source_arn.replace(app_baseline_name,api_id)
-    source_arn += "/*/$default"
-
-    add_permission_response = lambda_client.add_permission(
-        FunctionName = authfn_arn,
-        StatementId = app_baseline_name + "-permit_api_to_run_function",
-        Action = "lambda:InvokeFunction",
-        Principal = "apigateway.amazonaws.com",
-        SourceArn = source_arn
-    )
-    #logging.info(add_permission_response)
-    assert _get_response_status_code(add_permission_response) == 201
-
     # If API key protection is required, set up an authorizer
     stage_variables = {}
     if api_key is not None:
@@ -349,13 +335,6 @@ def deploy_api(app_baseline_name,lambda_deployment_result, api_key):
             "/invocations"
         )
         #logging.info(authorizer_uri)
-        add_permission_response = lambda_client.add_permission(
-            FunctionName = authfn_arn,
-            StatementId = app_baseline_name + "-permit_api_to_run_authfn",
-            Action = "lambda:InvokeFunction",
-            Principal = "apigateway.amazonaws.com",
-            SourceArn = source_arn
-        )
         create_authorizer_response = apiv2_client.create_authorizer(
             ApiId = api_id,
             #AuthorizerCredentialsArn = integration_arn,
@@ -375,17 +354,25 @@ def deploy_api(app_baseline_name,lambda_deployment_result, api_key):
             Name = 'waste-api-key-authorizer',
         )
         assert _get_response_status_code(create_authorizer_response) == 201
-        #logging.info(create_authorizer_response)
+        logging.info(create_authorizer_response)
+
+        ## TODO: Workout the right ARN for create-authorizer
+        # https://aws.amazon.com/premiumsupport/knowledge-center/api-gateway-http-lambda-integrations/
         authorizer_id = create_authorizer_response["AuthorizerId"]
 
-        auth_fn_arn = get_auth_fn_response["Configuration"]["FunctionArn"]
+        apigw_source_arn = "arn:aws:execute-api:%s:%s:%s/authorizers/%s" % (
+            region_name,account_id,api_id,authorizer_id
+        )
+        logging.info(apigw_source_arn)
+
         add_permission_response = lambda_client.add_permission(
-            FunctionName = app_baseline_name + "_authfn", #auth_fn_arn,
-            StatementId = app_baseline_name + "-permit_api_to_run_auth_function",
+            FunctionName = authfn_arn,
+            StatementId = app_baseline_name + "-permit_api_to_run_authorizer",
             Action = "lambda:InvokeFunction",
             Principal = "apigateway.amazonaws.com",
-            SourceArn = source_arn
+            SourceArn = apigw_source_arn
         )
+        #logging.info(add_permission_response)
         assert _get_response_status_code(add_permission_response) == 201
 
         # Attach the authorizer to the default route

@@ -2,7 +2,7 @@ import boto3
 
 class Factory:
     def __init__( self, region_name ):
-        self.aws_account = boto3.client('sts').get_caller_identity().get('Account')
+        self.aws_account_id = boto3.client('sts').get_caller_identity().get('Account')
         self.region_name = region_name
         self.clients = { }
         self._create_client("iam")
@@ -26,6 +26,9 @@ class Factory:
     def get_region_name(self):
         return self.region_name
         
+    def get_account_id(self):
+        return self.aws_account_id
+
     def get_integration_arn(self,fn_arn):
      return ":".join([
         "arn:aws:apigateway",
@@ -35,9 +38,9 @@ class Factory:
 
     def get_arn(self,prefix,suffix,include_region=True):
         if include_region is True:
-            return "%s:%s:%s:%s" % ( prefix, self.region_name, self.aws_account,suffix )
+            return "%s:%s:%s:%s" % ( prefix, self.region_name, self.aws_account_id,suffix )
         else:
-            return "%s::%s:%s" % ( prefix, self.aws_account, suffix )
+            return "%s::%s:%s" % ( prefix, self.aws_account_id, suffix )
             
 
 

@@ -21,7 +21,7 @@ from simulated_content_generation import (
     SIMULATED_BUCKET_CONTENTS
 )
 
-# '''
+'''
 def test_simple_deployment():
     retire_app("waste-test-0")
     baseline_name, baseline_url = deploy_app("waste-test-0", api_key=None)
