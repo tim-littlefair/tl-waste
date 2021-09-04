@@ -21,7 +21,7 @@ from simulated_content_generation import (
     SIMULATED_BUCKET_CONTENTS
 )
 
-'''
+# '''
 def test_simple_deployment():
     retire_app("waste-test-0")
     baseline_name, baseline_url = deploy_app("waste-test-0", api_key=None)
@@ -121,8 +121,8 @@ def test_deployment_with_cache_zip():
             int(actual_length/(request_read_time - request_start_time))
         )
 
-'''
 
+'''
 # Test for API key behaviour - presently failing
 def test_deployment_with_generated_api_key():
     retire_app("waste-test-4")

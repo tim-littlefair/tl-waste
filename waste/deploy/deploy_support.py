@@ -46,9 +46,8 @@ _S3_POLICY_JSON_BUCKET = """{
     ]
 }"""
 
-# For the moment, a hand-created role is used for both the primary 
-# service lambda and the authorizer lambda
-_LAMBDA_ROLE_NAME = "LambdaBasicExecution"
+
+# arn:aws:logs:*:441458683425:log-group:tim-test:log-stream:*
 
 _GROUP_SUFFIX_VIEWER = "logviewer"
 _GROUP_SUFFIX_EDITOR = "bucketeditor"
@@ -149,7 +148,6 @@ lambda_client = _factory.get_client('lambda')
 apiv2_client = _factory.get_client('apigatewayv2')
 logs_client = _factory.get_client('logs')
 region_name = _factory.get_region_name()
-account_id = _factory.get_account_id()
 
 lambda_url = None
 
@@ -182,6 +180,8 @@ def create_function(
         except FileNotFoundError:
             pass
     lambda_zip.close()
+    _LAMBDA_ROLE_NAME = "LambdaBasicExecution"
+    # For the moment, a hand-created role is in use
     role_arn = _factory.get_arn("arn:aws:iam","role/"+_LAMBDA_ROLE_NAME,include_region=False)
     which_handler = 'handler.simple_lambda_handler.lambda_handler'
     fn_env_vars = { ENVVAR_CONTENT_BUCKET_NAME: app_baseline_name }
@@ -217,15 +217,16 @@ def create_function(
     # log group - if the test invocation does not run the log group
     # is not created and the API gateway steps fail.
     logging.info("Starting lambda test invocation")
+    test_auth_response = lambda_client.invoke(
+        FunctionName=app_baseline_name + "_authfn",
+        LogType='Tail',
+        Payload=json.dumps(TEST_EVENT_FOR_AUTHFN)
+    )
     test_invocation_response = lambda_client.invoke(
         FunctionName=app_baseline_name,
         LogType='Tail',
         Payload=json.dumps(TEST_EVENT_FOR_HANDLER)
     )
-    #logging.info(test_invocation_response)
-    #logging.info(base64.b64_decode(test_invocation_response["x-amz-log-result"]))
-    assert _get_response_status_code(test_invocation_response) == 200
-
     logging.info("Finished lambda test invocation")
     for _ in range(0,10): #pragma: no branch
         loggroupName = '/aws/lambda/'+app_baseline_name
@@ -256,9 +257,11 @@ def create_bucket(app_bucket_name, content_zip_stream=None):
             'RestrictPublicBuckets': True        
         }
     )
+    bucket_policy = _S3_POLICY_JSON_BUCKET % ( app_bucket_name, )
+    logging.info(bucket_policy)
     s3_client.put_bucket_policy(
         Bucket=app_bucket_name,
-        Policy=_S3_POLICY_JSON_BUCKET % ( app_bucket_name, )
+        Policy=bucket_policy,
     )
 
     # Populate the bucket (if content is provided)
@@ -290,10 +293,7 @@ def create_bucket(app_bucket_name, content_zip_stream=None):
 def deploy_api(app_baseline_name,lambda_deployment_result, api_key):
     get_fn_response = lambda_client.get_function(FunctionName=app_baseline_name)
     fn_arn = get_fn_response["Configuration"]["FunctionArn"]
-    get_authfn_response  = lambda_client.get_function(FunctionName=app_baseline_name+"_authfn")
-    authfn_arn = get_authfn_response["Configuration"]["FunctionArn"]
     integration_arn = _factory.get_integration_arn(fn_arn)
-    logging.info(get_authfn_response)
 
     api_details = apiv2_client.create_api(
         Name=app_baseline_name, 
@@ -303,30 +303,47 @@ def deploy_api(app_baseline_name,lambda_deployment_result, api_key):
     assert _get_response_status_code(api_details) == 201
     api_id = api_details["ApiId"]
     api_endpoint = api_details["ApiEndpoint"]
-    #logging.info("API endpoint: %s", api_endpoint)
-    #logging.info("api_details:",api_details)
+    logging.info("API endpoint: %s", api_endpoint)
+    logging.info("api_details:",api_details)
 
     get_integrations_response = apiv2_client.get_integrations( 
         ApiId = api_id 
     )
-    assert _get_response_status_code(get_integrations_response) == 200
-    assert len(get_integrations_response["Items"]) == 1
     [[ integration_details ]] = [ get_integrations_response["Items"] ]
     integration_uri = integration_details['IntegrationUri']
+    logging.info(integration_uri)
+    source_arn = copy.deepcopy(integration_uri)
+    source_arn = source_arn.replace(":lambda:",":execute-api:") 
+    source_arn = source_arn.replace(":function:",":")
+    source_arn = source_arn.replace(app_baseline_name,api_id)
+    source_arn += "/*/$default"
+    #logging.info(integration_uri)
+    #logging.info(source_arn)
 
-    get_integration_response = apiv2_client.get_integration(
-        ApiId = api_id, IntegrationId = integration_details["IntegrationId"]        
+    add_permission_response = lambda_client.add_permission(
+        FunctionName = fn_arn,
+        StatementId = app_baseline_name + "-permit_api_to_run_function",
+        Action = "lambda:InvokeFunction",
+        Principal = "apigateway.amazonaws.com",
+        SourceArn = source_arn
     )
-    #logging.info(get_integration_response)
-    assert _get_response_status_code(get_integration_response) == 200
-    
+    logging.info(add_permission_response)
+    assert _get_response_status_code(add_permission_response) == 201
+
     # If API key protection is required, set up an authorizer
-    stage_variables = {}
+    stage_variables = None
     if api_key is not None:
-        stage_variables["WASTE_API_KEY"] = api_key
-        get_auth_fn_response = lambda_client.get_function(
-            FunctionName=app_baseline_name + "_authfn"
+        stage_variables =  { "WASTE_API_KEY": api_key }
+        get_auth_fn_response = lambda_client.get_function(FunctionName=app_baseline_name)
+        auth_fn_arn = get_auth_fn_response["Configuration"]["FunctionArn"]
+        add_permission_response = lambda_client.add_permission(
+            FunctionName = auth_fn_arn,
+            StatementId = app_baseline_name + "-permit_api_to_run_auth_function",
+            Action = "lambda:InvokeFunction",
+            Principal = "apigateway.amazonaws.com",
+            SourceArn = source_arn
         )
+        assert _get_response_status_code(add_permission_response) == 201
         authorizer_uri = (
             "arn:aws:apigateway:" + 
             region_name + 
@@ -334,104 +351,36 @@ def deploy_api(app_baseline_name,lambda_deployment_result, api_key):
             integration_uri + 
             "/invocations"
         )
-        #logging.info(authorizer_uri)
-        create_authorizer_response = apiv2_client.create_authorizer(
+        logging.info(authorizer_uri)
+        apiv2_client.create_authorizer(
             ApiId = api_id,
-            #AuthorizerCredentialsArn = integration_arn,
-            #AuthorizerCredentialsArn = source_arn,
-            #AuthorizerCredentialsArn = _factory.get_arn(
-            #    "arn:aws:iam","role/"+_LAMBDA_ROLE_NAME,include_region=False
-            #),
             AuthorizerPayloadFormatVersion = "2.0",
             AuthorizerResultTtlInSeconds = 300,
             AuthorizerType = 'REQUEST',
             AuthorizerUri = authorizer_uri,
             EnableSimpleResponses=True,
             IdentitySource = [ 
-                #'$request.header.x-api-key',
-                '$stageVariables.WASTE_API_KEY',
+                '$request.header.x-api-key','$stageVariables.WASTE_API_KEY',
             ],
-            Name = 'waste-api-key-authorizer',
+            Name = 'lambda-authorizer',
         )
-        assert _get_response_status_code(create_authorizer_response) == 201
-        logging.info(create_authorizer_response)
 
-        ## TODO: Workout the right ARN for create-authorizer
-        # https://aws.amazon.com/premiumsupport/knowledge-center/api-gateway-http-lambda-integrations/
-        authorizer_id = create_authorizer_response["AuthorizerId"]
-
-        apigw_source_arn = "arn:aws:execute-api:%s:%s:%s/authorizers/%s" % (
-            region_name,account_id,api_id,authorizer_id
+        update_stage_response = apiv2_client.update_stage(
+            ApiId = api_id,
+            AccessLogSettings = {
+                "DestinationArn": lambda_deployment_result["loggroup_arn"],
+                "Format": '{ "requestId":"$context.requestId", "status":"$context.status" }'
+            },
+            StageName = '$default',
+            DefaultRouteSettings = {
+                "DetailedMetricsEnabled": True,
+                "ThrottlingBurstLimit": 10,
+                "ThrottlingRateLimit": 10.0,
+            },
+            StageVariables = stage_variables
         )
-        logging.info(apigw_source_arn)
-
-        add_permission_response = lambda_client.add_permission(
-            FunctionName = authfn_arn,
-            StatementId = app_baseline_name + "-permit_api_to_run_authorizer",
-            Action = "lambda:InvokeFunction",
-            Principal = "apigateway.amazonaws.com",
-            SourceArn = apigw_source_arn
-        )
-        #logging.info(add_permission_response)
-        assert _get_response_status_code(add_permission_response) == 201
-
-        # Attach the authorizer to the default route
-        get_routes_response = apiv2_client.get_routes(ApiId = api_id)
-        assert _get_response_status_code(get_routes_response) == 200
-        assert len(get_routes_response["Items"]) == 1
-        default_route_id = get_routes_response["Items"][0]["RouteId"]
-        update_route_response = apiv2_client.update_route(
-            ApiId = api_id, RouteId = default_route_id,
-            AuthorizationType = 'CUSTOM',
-            AuthorizerId = authorizer_id
-        )
-        #logging.info(update_route_response)
-        assert _get_response_status_code(update_route_response) == 201
-
-    # Items available for inclusion in API access logs are listed here:
-    # https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-logging-variables.html
-    _LOG_FORMAT_ITEMS = [
-        "requestId", "extendedRequestId",
-        "accountId",
-        "authorizer.error", "authorizer.principalId",
-        "dataProcessed",
-        "error.message","error.messageString","error.responseType",
-        "httpMethod",
-        "identity.caller","identity.user",
-        "integration.error","integration.error.message","integration.status",
-        #"integration.integrationErrorMessage","integration.integrationStatus",
-        "responseLength",
-        "status"
-    ]
-    log_format = '{ '
-    for lfi in _LOG_FORMAT_ITEMS:
-        log_format += '"%s": "$context.%s" ' % ( lfi, lfi, )
-    log_format += '}'
-    update_stage_response = apiv2_client.update_stage(
-        ApiId = api_id,
-        AccessLogSettings = {
-            "DestinationArn": lambda_deployment_result["loggroup_arn"],
-            "Format": log_format
-        },
-        StageName = '$default',
-        DefaultRouteSettings = {
-            "DetailedMetricsEnabled": True,
-            "ThrottlingBurstLimit": 10,
-            "ThrottlingRateLimit": 10.0,
-            # We would like to have logging/tracing on but it is not supported, 
-            # as advertised in this error message
-            # E botocore.errorfactory.BadRequestException: 
-            # An error occurred (BadRequestException) when calling the UpdateStage operation: 
-            # Execution logs are not supported on protocolType HTTP
-            #"DataTraceEnabled": True,
-            #"LoggingLevel": "INFO"            
-        },
-        StageVariables = stage_variables
-    )
-    # logging.info(update_stage_response)
-    assert _get_response_status_code(update_stage_response) == 200
-    #logging.info(update_stage_response)
-
+        logging.info(update_stage_response)
+        assert _get_response_status_code(update_stage_response) == 200
     return api_details
 
 def deploy_bucket(app_baseline_name,initial_bucket_content_zip=None):
@@ -457,7 +406,7 @@ def deploy_app(
     default_doc_name=None, 
     cache_zip_path=None,
     create_groups=True,
-    api_key='*'
+    api_key=None
 ):
     logging.info("")
 

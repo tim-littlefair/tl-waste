@@ -41,6 +41,30 @@ class Factory:
             return "%s:%s:%s:%s" % ( prefix, self.region_name, self.aws_account_id,suffix )
         else:
             return "%s::%s:%s" % ( prefix, self.aws_account_id, suffix )
+
+    def get_s3_bucket_policy(self,app_bucket_name):
+        return """{
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Sid": "AllowLambdaToCreateAndAccessBucket",
+                    "Effect": "Allow",
+                    "Principal": {
+                        "AWS": [
+                            "arn:aws:iam::%s:role/LambdaBasicExecution"
+                        ]
+                    },
+                    "Action": [
+                        "s3:PutObject",
+                        "s3:PutObjectAcl",
+                        "s3:GetObject"
+                    ],
+                    "Resource": [
+                        "arn:aws:s3:::%s/*"
+                    ]
+                }
+            ]
+        }"""  % ( self.aws_account_id,app_bucket_name)          
             
 
 
