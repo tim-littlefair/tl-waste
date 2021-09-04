@@ -21,93 +21,6 @@ _logger = logging.getLogger()
 #_logger.addHandler(_handler)
 _logger.setLevel(logging.INFO)
 
-# Not used yet, but this is copied from a hand created bucket
-# which works
-_S3_POLICY_JSON_BUCKET = """{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Sid": "AllowLambdaToCreateAndAccessBucket",
-            "Effect": "Allow",
-            "Principal": {
-                "AWS": [
-                    "arn:aws:iam::441458683425:role/LambdaBasicExecution"
-                ]
-            },
-            "Action": [
-                "s3:PutObject",
-                "s3:PutObjectAcl",
-                "s3:GetObject"
-            ],
-            "Resource": [
-                "arn:aws:s3:::%s/*"
-            ]
-        }
-    ]
-}"""
-
-
-# arn:aws:logs:*:441458683425:log-group:tim-test:log-stream:*
-
-_GROUP_SUFFIX_VIEWER = "logviewer"
-_GROUP_SUFFIX_EDITOR = "bucketeditor"
-_GROUP_SUFFIX_LAMBDA = "lambdaeditor"
-_GROUP_POLICY_TEMPLATES = {
-    _GROUP_SUFFIX_VIEWER: """{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Sid": "%s",
-            "Effect": "Allow",
-            "Action": [
-                "logs:GetLogEvents",
-                "logs:FilterLogEvents"
-            ],
-            "Resource": [
-                "arn:aws:logs:*:441458683425:log-group:%s",
-                "arn:aws:logs:*:441458683425:log-group:%s:log-stream:*"
-            ]
-        }
-    ]
-}
-""",
-    _GROUP_SUFFIX_EDITOR: """{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Sid": "%s",
-            "Effect": "Allow",
-            "Action": [
-                "s3:PutObject",
-                "s3:GetObject",
-                "s3:ListBucket"
-            ],
-            "Resource": [
-                "arn:aws:s3:::%s",
-                "arn:aws:s3:::%s/*"
-            ]
-        }
-    ]
-}
-""",
-_GROUP_SUFFIX_LAMBDA: """{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Sid": "%s",
-            "Effect": "Allow",
-            "Action": "lambda:UpdateFunctionCode",
-            "Resource": [ 
-                "arn:aws:lambda:*:441458683425:function:%s",
-                "arn:aws:lambda:*:441458683425:function:%s"
-            ]                
-        }
-    ]
-}
-"""
-}
-
-
 _APIGW_LOG_FORMAT_JSON = """{
     "requestId":"$context.requestId",
     "ip": "$context.identity.sourceIp",
@@ -141,6 +54,7 @@ ENVVAR_CONTENT_BUCKET_NAME = "WASTE_CONTENT_BUCKET_NAME"
 ENVVAR_CACHE_OBJECT_NAME = "WASTE_CACHE_OBJECT_NAME"
 
 _factory = create_factory_for_kit()
+
 
 iam_client = _factory.get_client('iam')
 s3_client = _factory.get_client('s3')
@@ -257,8 +171,8 @@ def create_bucket(app_bucket_name, content_zip_stream=None):
             'RestrictPublicBuckets': True        
         }
     )
-    bucket_policy = _S3_POLICY_JSON_BUCKET % ( app_bucket_name, )
-    logging.info(bucket_policy)
+    bucket_policy = _factory.get_s3_bucket_policy( app_bucket_name, )
+    # logging.info(bucket_policy)
     s3_client.put_bucket_policy(
         Bucket=app_bucket_name,
         Policy=bucket_policy,
@@ -304,14 +218,14 @@ def deploy_api(app_baseline_name,lambda_deployment_result, api_key):
     api_id = api_details["ApiId"]
     api_endpoint = api_details["ApiEndpoint"]
     logging.info("API endpoint: %s", api_endpoint)
-    logging.info("api_details:",api_details)
+    #logging.info("api_details:",api_details)
 
     get_integrations_response = apiv2_client.get_integrations( 
         ApiId = api_id 
     )
     [[ integration_details ]] = [ get_integrations_response["Items"] ]
     integration_uri = integration_details['IntegrationUri']
-    logging.info(integration_uri)
+    #logging.info(integration_uri)
     source_arn = copy.deepcopy(integration_uri)
     source_arn = source_arn.replace(":lambda:",":execute-api:") 
     source_arn = source_arn.replace(":function:",":")
@@ -327,7 +241,7 @@ def deploy_api(app_baseline_name,lambda_deployment_result, api_key):
         Principal = "apigateway.amazonaws.com",
         SourceArn = source_arn
     )
-    logging.info(add_permission_response)
+    #logging.info(add_permission_response)
     assert _get_response_status_code(add_permission_response) == 201
 
     # If API key protection is required, set up an authorizer
@@ -379,7 +293,7 @@ def deploy_api(app_baseline_name,lambda_deployment_result, api_key):
             },
             StageVariables = stage_variables
         )
-        logging.info(update_stage_response)
+        #logging.info(update_stage_response)
         assert _get_response_status_code(update_stage_response) == 200
     return api_details
 
@@ -437,17 +351,21 @@ def deploy_app(
     if create_groups == False:
         logging.info("Creation of AIM security groups has been disabled")
     else:
+        _GROUP_SUFFIX_VIEWER = "logviewer"
+        _GROUP_SUFFIX_EDITOR = "bucketeditor"
+        _GROUP_SUFFIX_LAMBDA = "lambdaeditor"
+        _GROUP_POLICY_TEMPLATES = {
+            _GROUP_SUFFIX_VIEWER: _factory.get_log_viewer_policy(_GROUP_SUFFIX_VIEWER, app_baseline_name),
+            _GROUP_SUFFIX_EDITOR: _factory.get_s3_editor_policy(_GROUP_SUFFIX_EDITOR, app_baseline_name),
+            _GROUP_SUFFIX_LAMBDA: _factory.get_s3_editor_policy(_GROUP_SUFFIX_LAMBDA, app_baseline_name),
+        }
         for group_suffix in _GROUP_POLICY_TEMPLATES.keys():
             group_name = app_baseline_name+"-" + group_suffix
             iam_client.create_group(GroupName=group_name)
             iam_client.put_group_policy(
                 GroupName=group_name, 
                 PolicyName=group_name,
-                PolicyDocument=(
-                    _GROUP_POLICY_TEMPLATES[group_suffix] % (
-                        group_suffix, app_baseline_name, app_baseline_name#app_baseline_name
-                    )
-                )
+                PolicyDocument=_GROUP_POLICY_TEMPLATES[group_suffix]
             )
             logging.info("AIM security group %s has been created"%(group_name,))
     return app_baseline_name, url1
