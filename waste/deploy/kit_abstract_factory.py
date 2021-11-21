@@ -4,7 +4,7 @@ import botocore
 
 from .deploy_kit_aws import Factory as AwsFactory
 
-_DEFAULT_REGION_NAME='ap-southeast-2'
+_DEFAULT_REGION_NAME=os.getenv('AWS_DEFAULT_REGION','us-west-2')
 
 def create_factory_for_kit(
     region_name=_DEFAULT_REGION_NAME,

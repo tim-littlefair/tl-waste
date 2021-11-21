@@ -9,103 +9,17 @@ import botocore.exceptions
 import botocore
 import sys
 import traceback
-import binascii
+import base64
 import time
 import mimetypes
 import logging
+import copy
 
 _logger = logging.getLogger()
 #_handler = logging.StreamHandler(sys.stderr)
 #_handler.setFormatter(logging.Formatter())
 #_logger.addHandler(_handler)
 _logger.setLevel(logging.INFO)
-
-# Not used yet, but this is copied from a hand created bucket
-# which works
-_S3_POLICY_JSON_BUCKET = """{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Sid": "AllowLambdaToCreateAndAccessBucket",
-            "Effect": "Allow",
-            "Principal": {
-                "AWS": [ 
-                    "arn:aws:iam::441458683425:role/LambdaBasicExecution"
-                ]
-            },
-            "Action": [
-                "s3:PutObject",
-                "s3:PutObjectAcl",
-                "s3:GetObject"
-            ],
-            "Resource": [
-                "arn:aws:s3:::%s/*"
-            ]
-        }
-    ]
-}"""
-
-
-# arn:aws:logs:*:441458683425:log-group:tim-test:log-stream:*
-
-_GROUP_SUFFIX_VIEWER = "logviewer"
-_GROUP_SUFFIX_EDITOR = "bucketeditor"
-_GROUP_SUFFIX_LAMBDA = "lambdaeditor"
-_GROUP_POLICY_TEMPLATES = {
-    _GROUP_SUFFIX_VIEWER: """{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Sid": "%s",
-            "Effect": "Allow",
-            "Action": [
-                "logs:GetLogEvents",
-                "logs:FilterLogEvents"
-            ],
-            "Resource": [
-                "arn:aws:logs:*:441458683425:log-group:%s",
-                "arn:aws:logs:*:441458683425:log-group:%s:log-stream:*"
-            ]
-        }
-    ]
-}
-""",
-    _GROUP_SUFFIX_EDITOR: """{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Sid": "%s",
-            "Effect": "Allow",
-            "Action": [
-                "s3:PutObject",
-                "s3:GetObject",
-                "s3:ListBucket"
-            ],
-            "Resource": [
-                "arn:aws:s3:::%s",
-                "arn:aws:s3:::%s/*"
-            ]
-        }
-    ]
-}
-""",
-_GROUP_SUFFIX_LAMBDA: """{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Sid": "%s",
-            "Effect": "Allow",
-            "Action": "lambda:UpdateFunctionCode",
-            "Resource": [ 
-                "arn:aws:lambda:*:441458683425:function:%s",
-                "arn:aws:lambda:*:441458683425:function:%s"
-            ]                
-        }
-    ]
-}
-"""
-}
-
 
 _APIGW_LOG_FORMAT_JSON = """{
     "requestId":"$context.requestId",
@@ -119,6 +33,11 @@ _APIGW_LOG_FORMAT_JSON = """{
     "integrationError":"$context.integration.error",
     "errorMessage":"$context.error.message"
 }""".replace("\n"," ")
+
+TEST_EVENT_FOR_AUTHFN = {
+    "event": "abc",
+    "context": "xyz"
+}
 
 TEST_EVENT_FOR_HANDLER = {
     "requestContext": {
@@ -136,14 +55,13 @@ ENVVAR_CACHE_OBJECT_NAME = "WASTE_CACHE_OBJECT_NAME"
 
 _factory = create_factory_for_kit()
 
+
 iam_client = _factory.get_client('iam')
 s3_client = _factory.get_client('s3')
 lambda_client = _factory.get_client('lambda')
 apiv2_client = _factory.get_client('apigatewayv2')
 logs_client = _factory.get_client('logs')
 region_name = _factory.get_region_name()
-
-_CLOUDWATCH_LOGGROUP_ARN = _factory.get_arn("arn:aws:logs","log-group:/aws/lambda/")
 
 lambda_url = None
 
@@ -162,6 +80,7 @@ def create_function(
     cache_zip_path=None,
     do_test_invocation=True 
 ):
+    retval = {}
     _lambda_zip_name = app_baseline_name + ".zip"
     lambda_zip = zipfile.ZipFile(_lambda_zip_name, mode='w')
     for d in ("../handler","./handler","./waste/handler"):
@@ -195,6 +114,16 @@ def create_function(
         Environment={ "Variables" : fn_env_vars },
         MemorySize=256,
     )
+    create_authfn_response = lambda_client.create_function(
+        FunctionName=app_baseline_name+'_authfn',
+        Runtime='python3.8',
+        Role=role_arn,
+        Handler='handler.authorizer.lambda_handler',
+        Code=dict(ZipFile=open(_lambda_zip_name,"rb").read()),
+        Timeout=120, 
+        Environment={ "Variables" : fn_env_vars },
+        MemorySize=256,
+    )
     os.unlink(_lambda_zip_name)
 
     # At the moment, test invocation is mandatory because we are 
@@ -202,13 +131,17 @@ def create_function(
     # log group - if the test invocation does not run the log group
     # is not created and the API gateway steps fail.
     logging.info("Starting lambda test invocation")
+    test_auth_response = lambda_client.invoke(
+        FunctionName=app_baseline_name + "_authfn",
+        LogType='Tail',
+        Payload=json.dumps(TEST_EVENT_FOR_AUTHFN)
+    )
     test_invocation_response = lambda_client.invoke(
         FunctionName=app_baseline_name,
         LogType='Tail',
         Payload=json.dumps(TEST_EVENT_FOR_HANDLER)
     )
     logging.info("Finished lambda test invocation")
-
     for _ in range(0,10): #pragma: no branch
         loggroupName = '/aws/lambda/'+app_baseline_name
         logging.info("Waiting for AWS to create log group " + loggroupName)
@@ -216,8 +149,10 @@ def create_function(
             logGroupNamePrefix=loggroupName
         )
         if len(desc_logs_response['logGroups'])>0:
+            retval["loggroup_arn"] = desc_logs_response['logGroups'][0]['arn']
             break
         time.sleep(1)
+    return retval
 
 def create_bucket(app_bucket_name, content_zip_stream=None):
     create_bucket_response = s3_client.create_bucket(
@@ -236,9 +171,11 @@ def create_bucket(app_bucket_name, content_zip_stream=None):
             'RestrictPublicBuckets': True        
         }
     )
+    bucket_policy = _factory.get_s3_bucket_policy( app_bucket_name, )
+    # logging.info(bucket_policy)
     s3_client.put_bucket_policy(
         Bucket=app_bucket_name,
-        Policy=_S3_POLICY_JSON_BUCKET % ( app_bucket_name, )
+        Policy=bucket_policy,
     )
 
     # Populate the bucket (if content is provided)
@@ -267,7 +204,7 @@ def create_bucket(app_bucket_name, content_zip_stream=None):
             Key = last_bucket_key
         )
 
-def create_api_and_routes(app_baseline_name, lambda_deployment_result):
+def deploy_api(app_baseline_name,lambda_deployment_result, api_key):
     get_fn_response = lambda_client.get_function(FunctionName=app_baseline_name)
     fn_arn = get_fn_response["Configuration"]["FunctionArn"]
     integration_arn = _factory.get_integration_arn(fn_arn)
@@ -286,32 +223,78 @@ def create_api_and_routes(app_baseline_name, lambda_deployment_result):
     get_integrations_response = apiv2_client.get_integrations( 
         ApiId = api_id 
     )
-    #logging.info(get_integrations_response)
-    [ integration_details ] = [ get_integrations_response["Items"] ]
+    [[ integration_details ]] = [ get_integrations_response["Items"] ]
+    integration_uri = integration_details['IntegrationUri']
+    #logging.info(integration_uri)
+    source_arn = copy.deepcopy(integration_uri)
+    source_arn = source_arn.replace(":lambda:",":execute-api:") 
+    source_arn = source_arn.replace(":function:",":")
+    source_arn = source_arn.replace(app_baseline_name,api_id)
+    source_arn += "/*/$default"
+    #logging.info(integration_uri)
+    #logging.info(source_arn)
 
     add_permission_response = lambda_client.add_permission(
         FunctionName = fn_arn,
         StatementId = app_baseline_name + "-permit_api_to_run_function",
         Action = "lambda:InvokeFunction",
         Principal = "apigateway.amazonaws.com",
-        SourceArn = "arn:aws:execute-api:ap-southeast-2:441458683425:%s/*/$default" % (
-            api_id
-        )
+        SourceArn = source_arn
     )
     #logging.info(add_permission_response)
     assert _get_response_status_code(add_permission_response) == 201
 
-    update_stage_response = apiv2_client.update_stage(
-        ApiId = api_id,
-        StageName = '$default',
-        DefaultRouteSettings = {
-            "DetailedMetricsEnabled": True,
-            "ThrottlingBurstLimit": 10,
-            "ThrottlingRateLimit": 10.0
-        },
-    )
-    # logging.info(update_stage_response)
-    assert _get_response_status_code(update_stage_response) == 200
+    # If API key protection is required, set up an authorizer
+    stage_variables = None
+    if api_key is not None:
+        stage_variables =  { "WASTE_API_KEY": api_key }
+        get_auth_fn_response = lambda_client.get_function(FunctionName=app_baseline_name)
+        auth_fn_arn = get_auth_fn_response["Configuration"]["FunctionArn"]
+        add_permission_response = lambda_client.add_permission(
+            FunctionName = auth_fn_arn,
+            StatementId = app_baseline_name + "-permit_api_to_run_auth_function",
+            Action = "lambda:InvokeFunction",
+            Principal = "apigateway.amazonaws.com",
+            SourceArn = source_arn
+        )
+        assert _get_response_status_code(add_permission_response) == 201
+        authorizer_uri = (
+            "arn:aws:apigateway:" + 
+            region_name + 
+            ":lambda:path/2015-03-31/functions/" +
+            integration_uri + 
+            "/invocations"
+        )
+        logging.info(authorizer_uri)
+        apiv2_client.create_authorizer(
+            ApiId = api_id,
+            AuthorizerPayloadFormatVersion = "2.0",
+            AuthorizerResultTtlInSeconds = 300,
+            AuthorizerType = 'REQUEST',
+            AuthorizerUri = authorizer_uri,
+            EnableSimpleResponses=True,
+            IdentitySource = [ 
+                '$request.header.x-api-key','$stageVariables.WASTE_API_KEY',
+            ],
+            Name = 'lambda-authorizer',
+        )
+
+        update_stage_response = apiv2_client.update_stage(
+            ApiId = api_id,
+            AccessLogSettings = {
+                "DestinationArn": lambda_deployment_result["loggroup_arn"],
+                "Format": '{ "requestId":"$context.requestId", "status":"$context.status" }'
+            },
+            StageName = '$default',
+            DefaultRouteSettings = {
+                "DetailedMetricsEnabled": True,
+                "ThrottlingBurstLimit": 10,
+                "ThrottlingRateLimit": 10.0,
+            },
+            StageVariables = stage_variables
+        )
+        #logging.info(update_stage_response)
+        assert _get_response_status_code(update_stage_response) == 200
     return api_details
 
 def deploy_bucket(app_baseline_name,initial_bucket_content_zip=None):
@@ -328,12 +311,16 @@ def deploy_lambda(
         cache_zip_path
     )
 
-def deploy_api(app_baseline_name,lambda_deployment_result):
-    return create_api_and_routes(app_baseline_name,lambda_deployment_result)
+def generate_random_api_key():
+    securely_randomized_bytes = os.urandom(24)
+    return str(base64.urlsafe_b64encode(securely_randomized_bytes),'utf-8').strip()
 
 def deploy_app(
     app_name,content_zip_stream=None,
-    default_doc_name=None, cache_zip_path=None
+    default_doc_name=None, 
+    cache_zip_path=None,
+    create_groups=True,
+    api_key=None
 ):
     logging.info("")
 
@@ -350,21 +337,36 @@ def deploy_app(
         cache_zip_path
     )
     logging.info("Deploying API")
-    api_details = deploy_api(app_baseline_name, lambda_deployment_result)
+    if api_key == "*":
+        api_key = generate_random_api_key()
+        logging.info("Random generated API key is %s"%(api_key,))
+    api_details = deploy_api(
+        app_baseline_name, 
+        lambda_deployment_result,
+        api_key
+    )
     url1 = api_details["ApiEndpoint"]
     # Insert a short delay to ensure that the API is accessible
     time.sleep(3)
-    for group_suffix in _GROUP_POLICY_TEMPLATES.keys():
-        group_name = app_baseline_name+"-" + group_suffix
-        iam_client.create_group(GroupName=group_name)
-        iam_client.put_group_policy(
-            GroupName=group_name, 
-            PolicyName=group_name,
-            PolicyDocument=(
-                _GROUP_POLICY_TEMPLATES[group_suffix] % (
-                    group_suffix, app_baseline_name, app_baseline_name#app_baseline_name
-                )
+    if create_groups == False:
+        logging.info("Creation of AIM security groups has been disabled")
+    else:
+        _GROUP_SUFFIX_VIEWER = "logviewer"
+        _GROUP_SUFFIX_EDITOR = "bucketeditor"
+        _GROUP_SUFFIX_LAMBDA = "lambdaeditor"
+        _GROUP_POLICY_TEMPLATES = {
+            _GROUP_SUFFIX_VIEWER: _factory.get_log_viewer_policy(_GROUP_SUFFIX_VIEWER, app_baseline_name),
+            _GROUP_SUFFIX_EDITOR: _factory.get_s3_editor_policy(_GROUP_SUFFIX_EDITOR, app_baseline_name),
+            _GROUP_SUFFIX_LAMBDA: _factory.get_s3_editor_policy(_GROUP_SUFFIX_LAMBDA, app_baseline_name),
+        }
+        for group_suffix in _GROUP_POLICY_TEMPLATES.keys():
+            group_name = app_baseline_name+"-" + group_suffix
+            iam_client.create_group(GroupName=group_name)
+            iam_client.put_group_policy(
+                GroupName=group_name, 
+                PolicyName=group_name,
+                PolicyDocument=_GROUP_POLICY_TEMPLATES[group_suffix]
             )
-        )
+            logging.info("AIM security group %s has been created"%(group_name,))
     return app_baseline_name, url1
 

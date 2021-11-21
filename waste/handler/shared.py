@@ -43,7 +43,7 @@ def get_mockable_s3_client():
         # This code is not reachable when the handler is running under control
         # of unit tests in test_handler
         # pragma: nocover
-        return boto3.client('s3', region_name='ap-southeast-2')
+        return boto3.client('s3')
     else:
         debug_log("Using mock S3 client")
         return mock_s3_client
