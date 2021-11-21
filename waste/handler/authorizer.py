@@ -12,13 +12,13 @@ def lambda_handler(event, context):
     logger.setLevel(logging.INFO)    
     logging.info(event)
     logging.info(context)
-    is_authorized = True  # TODO change to false when tested
+    is_authorized = False  # TODO change to false when tested
     #if event.stageVariables["WASTE_API_KEY"] == event.request.headers["x-api-id"]:
     #    is_authorized = True
     return { 
         "isAuthorized": is_authorized, 
         "context": { 
-            "value1": "abc", 
+            "value1": "abdc", 
             "value2": "xyz"
         } 
     }

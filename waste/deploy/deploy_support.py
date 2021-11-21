@@ -279,21 +279,22 @@ def deploy_api(app_baseline_name,lambda_deployment_result, api_key):
             Name = 'lambda-authorizer',
         )
 
+        access_log_settings = {
+            "DestinationArn": lambda_deployment_result["loggroup_arn"],
+            "Format": '{ "requestId":"$context.requestId", "status":"$context.status" }'
+        },
         update_stage_response = apiv2_client.update_stage(
             ApiId = api_id,
-            AccessLogSettings = {
-                "DestinationArn": lambda_deployment_result["loggroup_arn"],
-                "Format": '{ "requestId":"$context.requestId", "status":"$context.status" }'
-            },
             StageName = '$default',
             DefaultRouteSettings = {
                 "DetailedMetricsEnabled": True,
                 "ThrottlingBurstLimit": 10,
                 "ThrottlingRateLimit": 10.0,
             },
+            AccessLogSettings = access_log_settings, 
             StageVariables = stage_variables
         )
-        #logging.info(update_stage_response)
+        logging.info(update_stage_response)
         assert _get_response_status_code(update_stage_response) == 200
     return api_details
 
