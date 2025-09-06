@@ -111,6 +111,6 @@ except botocore.exceptions.ClientError as e:
         sys.exit(2)
     else:
         pass
-except:
+except Exception as e:
     serialize_exception_for_log(e)
     sys.exit(3)

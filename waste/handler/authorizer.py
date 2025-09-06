@@ -17,9 +17,6 @@ def lambda_handler(event, context):
     #    is_authorized = True
     return { 
         "isAuthorized": is_authorized, 
-        "context": { 
-            "value1": "abdc", 
-            "value2": "xyz"
-        } 
+        "context": context
     }
 

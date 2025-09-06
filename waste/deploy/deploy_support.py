@@ -106,7 +106,7 @@ def create_function(
         which_handler = 'handler.caching_lambda_handler.lambda_handler'
     create_fn_response = lambda_client.create_function(
         FunctionName=app_baseline_name,
-        Runtime='python3.8',
+        Runtime='python3.12',
         Role=role_arn,
         Handler=which_handler,
         Code=dict(ZipFile=open(_lambda_zip_name,"rb").read()),
@@ -114,9 +114,10 @@ def create_function(
         Environment={ "Variables" : fn_env_vars },
         MemorySize=256,
     )
+    logging.info("cfr:%s",create_fn_response)    
     create_authfn_response = lambda_client.create_function(
         FunctionName=app_baseline_name+'_authfn',
-        Runtime='python3.8',
+        Runtime='python3.12',
         Role=role_arn,
         Handler='handler.authorizer.lambda_handler',
         Code=dict(ZipFile=open(_lambda_zip_name,"rb").read()),
@@ -124,24 +125,46 @@ def create_function(
         Environment={ "Variables" : fn_env_vars },
         MemorySize=256,
     )
+    logging.info("car:%s",create_authfn_response)    
     os.unlink(_lambda_zip_name)
+
+    # We need to wait until both functions are active before 
+    # we can do test invocations
+    count=10
+    while True:
+        time.sleep(1.0)
+        fn_state = lambda_client.get_function(
+            FunctionName=app_baseline_name
+        )
+        logging.info("State of function=%s",fn_state)
+        if fn_state['Configuration']['State'] == 'Pending':
+            continue
+        authfn_state = lambda_client.get_function(
+            FunctionName=app_baseline_name+'_authfn'
+        )
+        logging.info("State of auth function=%s","=",authfn_state)
+        if authfn_state['Configuration']['State'] == 'Pending':
+            continue
+        # If we get to here both functions are ready
+        break
 
     # At the moment, test invocation is mandatory because we are 
     # choosing for the API gateway to log to the same CloudWatch
     # log group - if the test invocation does not run the log group
     # is not created and the API gateway steps fail.
-    logging.info("Starting lambda test invocation")
+    logging.info("Starting lambda test invocations")
     test_auth_response = lambda_client.invoke(
         FunctionName=app_baseline_name + "_authfn",
         LogType='Tail',
-        Payload=json.dumps(TEST_EVENT_FOR_AUTHFN)
+        Payload=json.dumps(TEST_EVENT_FOR_AUTHFN),
     )
+    logging.info("tar:%s",test_auth_response)
     test_invocation_response = lambda_client.invoke(
         FunctionName=app_baseline_name,
         LogType='Tail',
         Payload=json.dumps(TEST_EVENT_FOR_HANDLER)
     )
-    logging.info("Finished lambda test invocation")
+    logging.info("tir:%s", test_invocation_response)
     for _ in range(0,10): #pragma: no branch
         loggroupName = '/aws/lambda/'+app_baseline_name
         logging.info("Waiting for AWS to create log group " + loggroupName)
@@ -151,7 +174,7 @@ def create_function(
         if len(desc_logs_response['logGroups'])>0:
             retval["loggroup_arn"] = desc_logs_response['logGroups'][0]['arn']
             break
-        time.sleep(1)
+        time.sleep(5)
     return retval
 
 def create_bucket(app_bucket_name, content_zip_stream=None):
@@ -245,8 +268,9 @@ def deploy_api(app_baseline_name,lambda_deployment_result, api_key):
     assert _get_response_status_code(add_permission_response) == 201
 
     # If API key protection is required, set up an authorizer
-    stage_variables = None
+    stage_variables = {}
     if api_key is not None:
+        logging.info("Setting up API key")
         stage_variables =  { "WASTE_API_KEY": api_key }
         get_auth_fn_response = lambda_client.get_function(FunctionName=app_baseline_name)
         auth_fn_arn = get_auth_fn_response["Configuration"]["FunctionArn"]
@@ -278,24 +302,27 @@ def deploy_api(app_baseline_name,lambda_deployment_result, api_key):
             ],
             Name = 'lambda-authorizer',
         )
+    else:
+        logging.info("API key not configured")
 
-        access_log_settings = {
-            "DestinationArn": lambda_deployment_result["loggroup_arn"],
-            "Format": '{ "requestId":"$context.requestId", "status":"$context.status" }'
+    logging.info("Configuring log settings")
+    access_log_settings = {
+        "DestinationArn": lambda_deployment_result["loggroup_arn"],
+        "Format": '{ "requestId":"$context.requestId", "status":"$context.status" }'
+    }
+    update_stage_response = apiv2_client.update_stage(
+        ApiId = api_id,
+        StageName = '$default',
+        DefaultRouteSettings = {
+            "DetailedMetricsEnabled": True,
+            "ThrottlingBurstLimit": 10,
+            "ThrottlingRateLimit": 10.0,
         },
-        update_stage_response = apiv2_client.update_stage(
-            ApiId = api_id,
-            StageName = '$default',
-            DefaultRouteSettings = {
-                "DetailedMetricsEnabled": True,
-                "ThrottlingBurstLimit": 10,
-                "ThrottlingRateLimit": 10.0,
-            },
-            AccessLogSettings = access_log_settings, 
-            StageVariables = stage_variables
-        )
-        logging.info(update_stage_response)
-        assert _get_response_status_code(update_stage_response) == 200
+        AccessLogSettings = access_log_settings, 
+        StageVariables = stage_variables
+    )
+    logging.info(update_stage_response)
+    assert _get_response_status_code(update_stage_response) == 200
     return api_details
 
 def deploy_bucket(app_baseline_name,initial_bucket_content_zip=None):
